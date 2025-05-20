@@ -95,6 +95,7 @@ public class Function : FunctionBase
 
         throw new InvalidRequestException("Unknown event format - request must be from EventBridge or API Gateway");
     }
+
     private bool TryGetPropertyIgnoreCase(JsonElement jsonElement, string propertyName, out JsonElement value)
     {
         foreach (var prop in jsonElement.EnumerateObject())
@@ -108,54 +109,6 @@ public class Function : FunctionBase
         value = default;
         return false;
     }
-
-    //private static bool IsEventBridgeRequest(JsonElement jsonElement)
-    //{
-    //    return TryGetPropertyIgnoreCase(jsonElement, "source", out var sourceProp) &&
-    //           string.Equals(sourceProp.GetString(), EventBridgeSource, StringComparison.OrdinalIgnoreCase);
-    //}
-    //private static bool IsApiGatewayRequest(JsonElement jsonElement)
-    //{
-    //    return TryGetPropertyIgnoreCase(jsonElement, "body", out _);
-    //}
-
-    //private SkuRequestDto HandleEventBridgeRequest(JsonElement jsonElement)
-    //{
-    //    _logger.LogInfo("EventBridge source detected");
-
-    //    // For EventBridge events, we might extract SKUs from the event detail
-    //    // For now, returning empty list as in original code
-    //    return new SkuRequestDto { Skus = new List<string>() };
-    //}
-
-    //private SkuRequestDto HandleApiGatewayRequest(JsonElement jsonElement)
-    //{
-    //    _logger.LogInfo("API Gateway source detected");
-
-    //    if (!jsonElement.TryGetProperty("body", out var bodyProp))
-    //    {
-    //        throw new InvalidRequestException("API Gateway request missing body");
-    //    }
-
-    //    var body = bodyProp.GetString();
-    //    if (string.IsNullOrWhiteSpace(body))
-    //    {
-    //        throw new InvalidRequestException("API Gateway request body is empty");
-    //    }
-
-    //    try
-    //    {
-    //        var bodyData = JsonSerializer.Deserialize<SkuRequestDto>(body);
-    //        return new SkuRequestDto
-    //        {
-    //            Skus = bodyData?.Skus ?? new List<string>()
-    //        };
-    //    }
-    //    catch (JsonException ex)
-    //    {
-    //        throw new InvalidRequestException($"Invalid JSON in request body: {ex.Message}");
-    //    }
-    //}
 
     private static APIGatewayProxyResponse CreateSuccessResponse(object result)
     {
