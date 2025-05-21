@@ -63,11 +63,11 @@ namespace SnowflakeItemMaster.Application.UseCases
             result.TotalSKUs = request.Skus.Count;
             _logger.LogInfo($"Retrieved {itemPetals.Count} items from Snowflake");
 
-            // 2. Transform and validate
-            var processedItems = await TransformAndValidateItemsParallelAsync(itemPetals);
+            // 2. Transform and validate (e.i: with batching if > 100 items)
+            var processedItems = await TransformAndValidateItemsAsync(itemPetals);
 
-            // 3. Process items and track results
-            await ProcessItemsInParallelAsync(processedItems, result);
+            // 3. Process items and track results (e.i: with batching if > 100 items)
+            await ProcessItemsAsync(processedItems, result);
 
             return result;
         }
@@ -79,6 +79,21 @@ namespace SnowflakeItemMaster.Application.UseCases
                     : await _itemPetalRepository.GetItemsWithLimitAsync(_schedulerConfigs.Limit, _schedulerConfigs.Hours);
 
             return result;
+        }
+
+        private async Task<List<ProcessedItemResult>> TransformAndValidateItemsAsync(List<ItemPetal> itemPetals)
+        {
+            if (itemPetals == null || !itemPetals.Any())
+                return new List<ProcessedItemResult>();
+
+            // If items <= 100, use original parallel processing
+            if (itemPetals.Count <= _performanceConfigs.BatchSize)
+            {
+                return await TransformAndValidateItemsParallelAsync(itemPetals);
+            }
+
+            // If items > 100, use batch processing
+            return await TransformAndValidateItemsInBatchesAsync(itemPetals);
         }
 
         private async Task<List<ProcessedItemResult>> TransformAndValidateItemsParallelAsync(List<ItemPetal> itemPetals)
@@ -135,6 +150,45 @@ namespace SnowflakeItemMaster.Application.UseCases
                 });
 
             return processedItems.ToList();
+        }
+
+        private async Task<List<ProcessedItemResult>> TransformAndValidateItemsInBatchesAsync(List<ItemPetal> itemPetals)
+        {
+            var allProcessedItems = new List<ProcessedItemResult>();
+            var batchSize = _performanceConfigs.BatchSize;
+            var totalBatches = (int)Math.Ceiling((double)itemPetals.Count / batchSize);
+
+            _logger.LogInfo($"Processing {itemPetals.Count} items in {totalBatches} batches of size {batchSize}");
+
+            for (int i = 0; i < totalBatches; i++)
+            {
+                var batch = itemPetals.Skip(i * batchSize).Take(batchSize).ToList();
+                _logger.LogInfo($"Processing batch {i + 1}/{totalBatches} with {batch.Count} items");
+
+                var batchResult = await TransformAndValidateItemsParallelAsync(batch);
+                allProcessedItems.AddRange(batchResult);
+
+                // Add delay between batches to prevent resource exhaustion
+                if (i < totalBatches - 1)
+                {
+                    await Task.Delay(100); // 100ms delay between batches
+                }
+            }
+
+            return allProcessedItems;
+        }
+
+        private async Task ProcessItemsAsync(List<ProcessedItemResult> items, SkuProcessingResponseDto result)
+        {
+            // If items <= 100, use original parallel processing
+            if (items.Count <= _performanceConfigs.BatchSize)
+            {
+                await ProcessItemsInParallelAsync(items, result);
+                return;
+            }
+
+            // If items > 100, use batch processing
+            await ProcessItemsInBatchesAsync(items, result);
         }
 
         private async Task ProcessItemsInParallelAsync(List<ProcessedItemResult> items, SkuProcessingResponseDto result)
@@ -200,6 +254,107 @@ namespace SnowflakeItemMaster.Application.UseCases
             catch (Exception ex)
             {
                 _logger.LogError($"Error in ProcessItemsInParallelAsync: {ex}");
+                throw;
+            }
+        }
+
+        private async Task ProcessItemsInBatchesAsync(List<ProcessedItemResult> items, SkuProcessingResponseDto result)
+        {
+            try
+            {
+                var batchSize = _performanceConfigs.BatchSize;
+                var totalBatches = (int)Math.Ceiling((double)items.Count / batchSize);
+                var allSqsResults = new List<(int Id, bool Success, string Error)>();
+
+                _logger.LogInfo($"Processing {items.Count} items in {totalBatches} batches for database and SQS operations");
+
+                // Initialize counters
+                int totalLogSaved = 0;
+                int totalValidSKUs = 0;
+                int totalInvalidSKUs = 0;
+                int totalSqsSuccess = 0;
+                int totalSqsFailed = 0;
+
+                for (int i = 0; i < totalBatches; i++)
+                {
+                    var batch = items.Skip(i * batchSize).Take(batchSize).ToList();
+                    _logger.LogInfo($"Processing batch {i + 1}/{totalBatches} with {batch.Count} items");
+
+                    // 1. Save source logs for this batch
+                    var sourceLogs = batch.Where(x => x.SourceLog != null)
+                        .Select(x => x.SourceLog)
+                        .ToList();
+
+                    _repositoryManager.ItemMasterSourceLog.AddRange(sourceLogs!);
+                    await _repositoryManager.SaveAsync();
+                    totalLogSaved += sourceLogs.Count;
+
+                    // 2. Process valid items in this batch
+                    var validItems = batch.Where(item => item.IsValid && item.UnifiedModel != null).ToList();
+                    totalValidSKUs += validItems.Count;
+                    totalInvalidSKUs += batch.Count - validItems.Count;
+
+                    // 3. Process SQS messages for this batch in parallel
+                    var batchSqsResults = new ConcurrentBag<(int Id, bool Success, string Error)>();
+                    int batchSuccessCount = 0;
+                    int batchFailedCount = 0;
+
+                    await Parallel.ForEachAsync(
+                        validItems,
+                        new ParallelOptions { MaxDegreeOfParallelism = _performanceConfigs.ParallelDegree },
+                        async (item, ct) =>
+                        {
+                            try
+                            {
+                                (bool success, string messsage) = await _messageQueue.PublishItemAsync(item.UnifiedModel!);
+                                string errorMessage = success ? string.Empty : messsage;
+                                batchSqsResults.Add((item.SourceLog!.Id, success, errorMessage));
+
+                                if (success)
+                                {
+                                    Interlocked.Increment(ref batchSuccessCount);
+                                }
+                                else
+                                {
+                                    Interlocked.Increment(ref batchFailedCount);
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogError($"Error publishing SKU {item.SourceLog!.Sku} to SQS: {ex.Message}");
+                                batchSqsResults.Add((item.SourceLog.Id, false, ex.Message));
+                                Interlocked.Increment(ref batchFailedCount);
+                            }
+                        });
+
+                    totalSqsSuccess += batchSuccessCount;
+                    totalSqsFailed += batchFailedCount;
+
+                    // 4. Update database with SQS results for this batch
+                    var batchSqsResultsList = batchSqsResults.ToList();
+                    await UpdateItemSourceLogWithSQSResultAsync(batchSqsResultsList);
+                    allSqsResults.AddRange(batchSqsResultsList);
+
+                    // Optional: Add delay between batches
+                    if (i < totalBatches - 1)
+                    {
+                        await Task.Delay(100); // 100ms delay between batches
+                    }
+                }
+
+                // Set final results
+                result.LogSaved = totalLogSaved;
+                result.ValidSKUs = totalValidSKUs;
+                result.InvalidSKUs = totalInvalidSKUs;
+                result.SqsSuccess = totalSqsSuccess;
+                result.SqsFailed = totalSqsFailed;
+
+                // 5. Create response details
+                CreateResponseDetail(items, result, allSqsResults);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError($"Error in ProcessItemsInBatchesAsync: {ex}");
                 throw;
             }
         }

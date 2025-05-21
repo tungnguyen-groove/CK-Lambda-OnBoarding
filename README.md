@@ -16,11 +16,11 @@ The service follows a clean architecture pattern with the following components:
 
 ## Prerequisites
 
-- .NET 6.0 SDK or later
+- .NET 8.0 SDK
 - AWS CLI configured with appropriate permissions
 - Access to Snowflake database
 - MySQL RDS instance
-- AWS services (Lambda, API Gateway, EventBridge, SQS)
+- AWS services (Lambda, API Gateway, EventBridge, SQS, RDS)
 
 ## Project Structure
 
@@ -30,10 +30,14 @@ src/
 ├── SnowflakeItemMaster.Infrastructure/ # External service implementations
 ├── SnowflakeItemMaster.Lambda/        # AWS Lambda function handlers
 └── SnowflakeItemMaster.Api/           # API models and contracts
+└── SnowflakeItemMaster.Provider.Snowflake/           # Provider service implementations
 
 tests/
 ├── SnowflakeItemMaster.UnitTests/
 └── SnowflakeItemMaster.IntegrationTests/
+
+infras/src
+├── Infra/     # Infra stack to deploy using AWS CDK
 ```
 
 ## Configuration
@@ -42,18 +46,36 @@ The service uses the following configuration structure in AWS Systems Manager Pa
 
 ```json
 {
-  "Snowflake": {
-    "ConnectionString": "...",
-    "Schema": "XB_DEV_DB",
-    "Table": "ITEM_PETAL_US"
-  },
-  "MySQL": {
-    "ConnectionString": "..."
-  },
-  "AWS": {
-    "SQSQueueUrl": "...",
-    "Region": "..."
-  }
+   "AwsSqsSettings": {
+      "QueueUrl": "your-QueueUrl",
+      "Region": "your-Region",
+      "MaxRetries": 3,
+      "RetryDelayMilliseconds": 1000
+   },
+   "SnowflakeSettings": {
+      "Account": "your-Account",
+      "Database": "your-Database",
+      "Warehouse": "your-Warehouse",
+      "User": "your-User",
+      "Password": "your-Password",
+      "Schema": "your-Schema",
+      "Role": "your-Role"
+   },
+   "DatabaseSettings": {
+      "Host": "your-Host",
+      "Database": "your-Database",
+      "User": "your-User",
+      "Password": "your-Password"
+   },
+   "PerformanceConfigs": {
+      "ParallelDegree": 10,
+      "BatchSize": 10,
+      "EnableBatching": true
+   },
+   "SchedulerConfigs": {
+      "Hours": 1,
+      "Limit": 100
+   }
 }
 ```
 
@@ -64,14 +86,10 @@ The service uses the following configuration structure in AWS Systems Manager Pa
    ```bash
    dotnet restore
    ```
-3. Set up local configuration in `appsettings.Development.json`
+3. Set up local configuration in `appsettings.json`
 4. Run tests:
    ```bash
    dotnet test
-   ```
-5. Run locally using AWS SAM:
-   ```bash
-   sam local start-api
    ```
 
 ## Deployment
@@ -86,7 +104,13 @@ The service uses the following configuration structure in AWS Systems Manager Pa
    ```
 3. Deploy using CloudFormation/SAM:
    ```bash
-   sam deploy --guided
+   cd infras
+   dotnet build src
+   cdk bootstrap # run only once time
+   cdk synth    # Test CloudFormation template
+   cdk diff     # View changes (if previously deployed)
+   cdk deploy
+   cdk destroy  # delete resource
    ```
 
 ## Testing
@@ -94,7 +118,6 @@ The service uses the following configuration structure in AWS Systems Manager Pa
 The solution includes:
 - Unit tests for business logic
 - Integration tests for external services
-- Load tests for performance validation
 
 Run tests with:
 ```bash
@@ -104,24 +127,17 @@ dotnet test
 ## Monitoring and Observability
 
 - CloudWatch Logs for application logging
-- CloudWatch Metrics for performance monitoring
-- X-Ray for distributed tracing
-- Custom metrics for business KPIs
 
 ## Error Handling
 
 The service implements resilient error handling:
 - Retry policies for transient failures
 - Circuit breakers for external services
-- Dead letter queues for failed messages
 - Comprehensive error logging
 
 ## Security
 
 - AWS IAM roles and policies
-- Secrets management via AWS Systems Manager
-- Encryption at rest and in transit
-- Network security through VPC configuration
 
 ## Contributing
 
