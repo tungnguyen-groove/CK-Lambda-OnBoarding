@@ -3,7 +3,6 @@ using SnowflakeItemMaster.Application.Builders;
 using SnowflakeItemMaster.Application.Constansts;
 using SnowflakeItemMaster.Application.Models;
 using SnowflakeItemMaster.Domain.Providers;
-using Xunit;
 
 namespace SnowflakeItemMaster.Application.Tests.Builders
 {
