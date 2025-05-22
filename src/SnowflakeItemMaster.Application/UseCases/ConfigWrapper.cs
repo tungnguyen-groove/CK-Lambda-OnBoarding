@@ -67,7 +67,20 @@ namespace SnowflakeItemMaster.Application.UseCases
 
         public AwsSqsSettings GetAwsSqsSettings()
         {
-            return _configuration.GetSection("AwsSqsSettings").Get<AwsSqsSettings>() ?? new AwsSqsSettings();
+            var queueUrl = Environment.GetEnvironmentVariable(ConfigConstants.AWSConfigConstants.QueueUrl);
+            var region = Environment.GetEnvironmentVariable(ConfigConstants.AWSConfigConstants.Region);
+            var awsSqsSettings = _configuration.GetSection("AwsSqsSettings").Get<AwsSqsSettings>() ?? new AwsSqsSettings();
+            
+            if (!string.IsNullOrEmpty(queueUrl))
+            {
+                awsSqsSettings.QueueUrl = queueUrl;
+            }
+            if (!string.IsNullOrEmpty(region))
+            {
+                awsSqsSettings.Region = region;
+            }
+
+            return awsSqsSettings;
         }
 
         public PerformanceConfigs GetPerformanceConfigs()

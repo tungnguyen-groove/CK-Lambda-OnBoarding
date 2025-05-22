@@ -26,5 +26,11 @@ namespace SnowflakeItemMaster.Application.Constansts
             public const string User = "DATABASE_USER";
             public const string Password = "DATABASE_PASSWORD";
         }
+
+        public static class AWSConfigConstants
+        {
+            public const string QueueUrl = "AWS_SQS_QueueURL";
+            public const string Region = "AWS_SQS_Region";
+        }
     }
 }
